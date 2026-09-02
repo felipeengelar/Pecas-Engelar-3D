@@ -184,7 +184,7 @@ const SITE_PASSWORD = "ENGELAR";
 // Lista de peças: nome exibido + link direto para o arquivo .ifc
 // Use links diretos (ex: GitHub raw, ou link de download direto do Drive)
 const PIECES = [
-  { name: "SP3", url: "https://raw.githubusercontent.com/felipeengelar/PE-AS-3D/main/SP3.ifc" },
+  { name: "SP3", url: "https://raw.githubusercontent.com/felipeengelar/Pecas-Engelar-3D/main/SP3.ifc" },
 ];
 
 window.SITE_PASSWORD = SITE_PASSWORD;
@@ -237,7 +237,8 @@ function renderListFallback() {
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "web-ifc": "https://cdn.jsdelivr.net/npm/web-ifc@0.0.77/web-ifc-api.js"
   }
 }
 </script>
@@ -245,7 +246,11 @@ function renderListFallback() {
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { IFCLoader } from 'three/addons/loaders/IFCLoader.js';
+import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { IfcAPI } from 'web-ifc';
+
+const WEB_IFC_VERSION = '0.0.77';
+const WEB_IFC_WASM_PATH = 'https://cdn.jsdelivr.net/npm/web-ifc@' + WEB_IFC_VERSION + '/';
 
 const PIECES = window.PIECES;
 window.__initViewer = initViewer;
@@ -288,10 +293,10 @@ function selectPiece(index, itemEl) {
   loadPiece(PIECES[index]);
 }
 
-// ---- Viewer 3D (three.js + IFCLoader) ----
-let scene, camera, renderer, controls, ifcLoader, currentModel;
+// ---- Viewer 3D (three.js + web-ifc, método oficial atual) ----
+let scene, camera, renderer, controls, ifcAPI, currentModel;
 
-function initViewer() {
+async function initViewer() {
   const container = document.getElementById('viewer-container');
 
   scene = new THREE.Scene();
@@ -307,17 +312,21 @@ function initViewer() {
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
   scene.add(hemi);
-  const dir = new THREE.DirectionalLight(0xffffff, 1);
-  dir.position.set(20, 30, 20);
-  scene.add(dir);
+  const dir1 = new THREE.DirectionalLight(0xffeeff, 2.5);
+  dir1.position.set(1, 1, 1);
+  scene.add(dir1);
+  const dir2 = new THREE.DirectionalLight(0xffffff, 2.5);
+  dir2.position.set(-1, 0.5, -1);
+  scene.add(dir2);
   const grid = new THREE.GridHelper(50, 50, 0x2a303a, 0x1a1e24);
   scene.add(grid);
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  ifcLoader = new IFCLoader();
-  ifcLoader.ifcManager.setWasmPath('https://cdn.jsdelivr.net/npm/web-ifc@0.0.51/');
+  ifcAPI = new IfcAPI();
+  ifcAPI.SetWasmPath(WEB_IFC_WASM_PATH);
+  await ifcAPI.Init();
 
   window.addEventListener('resize', () => {
     camera.aspect = container.clientWidth / container.clientHeight;
@@ -335,7 +344,86 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-function loadPiece(piece) {
+const _tmpColor = new THREE.Color();
+
+function ifcGeometryToBuffer(color, vertexData, indexData) {
+  // web-ifc retorna [px, py, pz, nx, ny, nz] por vértice
+  const vertexCount = vertexData.length / 6;
+  const positions = new Float32Array(vertexCount * 3);
+  const normals = new Float32Array(vertexCount * 3);
+  const colors = new Float32Array(vertexCount * 4);
+
+  _tmpColor.setRGB(color.x, color.y, color.z, THREE.SRGBColorSpace);
+
+  for (let v = 0; v < vertexCount; v++) {
+    const src = v * 6;
+    const d3 = v * 3;
+    const d4 = v * 4;
+    positions[d3] = vertexData[src];
+    positions[d3 + 1] = vertexData[src + 1];
+    positions[d3 + 2] = vertexData[src + 2];
+    normals[d3] = vertexData[src + 3];
+    normals[d3 + 1] = vertexData[src + 4];
+    normals[d3 + 2] = vertexData[src + 5];
+    colors[d4] = _tmpColor.r;
+    colors[d4 + 1] = _tmpColor.g;
+    colors[d4 + 2] = _tmpColor.b;
+    colors[d4 + 3] = color.w;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+  geometry.setIndex(new THREE.BufferAttribute(indexData, 1));
+  return geometry;
+}
+
+function getBufferGeometry(modelID, placedGeometry) {
+  const geometry = ifcAPI.GetGeometry(modelID, placedGeometry.geometryExpressID);
+  const vertexData = ifcAPI.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+  const indexData = ifcAPI.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+  const bufferGeometry = ifcGeometryToBuffer(placedGeometry.color, vertexData, indexData);
+  geometry.delete();
+  return bufferGeometry;
+}
+
+function buildModelMesh(modelID) {
+  const opaqueGeometries = [];
+  const transparentGeometries = [];
+
+  ifcAPI.StreamAllMeshes(modelID, (flatMesh) => {
+    const placedGeometries = flatMesh.geometries;
+    for (let i = 0; i < placedGeometries.size(); i++) {
+      const placedGeometry = placedGeometries.get(i);
+      const geom = getBufferGeometry(modelID, placedGeometry);
+      const matrix = new THREE.Matrix4().fromArray(placedGeometry.flatTransformation);
+      geom.applyMatrix4(matrix);
+      if (placedGeometry.color.w !== 1) {
+        transparentGeometries.push(geom);
+      } else {
+        opaqueGeometries.push(geom);
+      }
+    }
+  });
+
+  const group = new THREE.Group();
+
+  if (opaqueGeometries.length > 0) {
+    const merged = BufferGeometryUtils.mergeGeometries(opaqueGeometries);
+    const material = new THREE.MeshPhongMaterial({ side: THREE.DoubleSide, vertexColors: true });
+    group.add(new THREE.Mesh(merged, material));
+  }
+  if (transparentGeometries.length > 0) {
+    const merged = BufferGeometryUtils.mergeGeometries(transparentGeometries);
+    const material = new THREE.MeshPhongMaterial({ side: THREE.DoubleSide, vertexColors: true, transparent: true });
+    group.add(new THREE.Mesh(merged, material));
+  }
+
+  return group;
+}
+
+async function loadPiece(piece) {
   errorBoxEl.classList.remove('visible');
   placeholderEl.style.display = 'none';
   loadingTextEl.textContent = 'Carregando "' + piece.name + '"…';
@@ -348,37 +436,40 @@ function loadPiece(piece) {
     currentModel = null;
   }
 
-  ifcLoader.load(
-    piece.url,
-    (model) => {
-      currentModel = model;
-      scene.add(model);
+  try {
+    const response = await fetch(piece.url);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = new Uint8Array(await response.arrayBuffer());
 
-      // centraliza e enquadra a câmera no modelo
-      const box = new THREE.Box3().setFromObject(model);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN: true });
+    const model = buildModelMesh(modelID);
+    ifcAPI.CloseModel(modelID);
 
-      controls.target.copy(center);
-      camera.position.copy(center).add(new THREE.Vector3(maxDim, maxDim, maxDim));
-      camera.near = maxDim / 100;
-      camera.far = maxDim * 100;
-      camera.updateProjectionMatrix();
-      controls.update();
+    currentModel = model;
+    scene.add(model);
 
-      loadingEl.classList.remove('visible');
-    },
-    undefined,
-    (err) => {
-      console.error(err);
-      loadingEl.classList.remove('visible');
-      errorBoxEl.textContent = 'Não foi possível carregar esta peça. Verifique se o link é um link direto para o arquivo .ifc (não uma página de visualização) e se o arquivo está acessível publicamente.';
-      errorBoxEl.classList.add('visible');
-      placeholderEl.style.display = 'flex';
-      titleEl.classList.remove('visible');
-    }
-  );
+    // centraliza e enquadra a câmera no modelo
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+    controls.target.copy(center);
+    camera.position.copy(center).add(new THREE.Vector3(maxDim, maxDim, maxDim));
+    camera.near = maxDim / 100;
+    camera.far = maxDim * 100;
+    camera.updateProjectionMatrix();
+    controls.update();
+
+    loadingEl.classList.remove('visible');
+  } catch (err) {
+    console.error(err);
+    loadingEl.classList.remove('visible');
+    errorBoxEl.textContent = 'Não foi possível carregar esta peça. Verifique se o link é um link direto para o arquivo .ifc (não uma página de visualização) e se o arquivo está acessível publicamente.';
+    errorBoxEl.classList.add('visible');
+    placeholderEl.style.display = 'flex';
+    titleEl.classList.remove('visible');
+  }
 }
 </script>
 </body>
