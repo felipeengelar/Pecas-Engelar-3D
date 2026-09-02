@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Visualizador de Peças 3D</title>
+<style>
+  :root{
+    --bg: #0f1216;
+    --panel: #171b21;
+    --panel-2: #1e232b;
+    --border: #2a303a;
+    --text: #e7eaee;
+    --muted: #8b929e;
+    --accent: #4f8cff;
+    --accent-2: #3f74d9;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+
+  /* ---------- Tela de senha ---------- */
+  #gate {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 20%, #1a2030, #0f1216 70%);
+    z-index: 100;
+  }
+  #gate .box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 32px 28px;
+    width: 320px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  }
+  #gate h1 { font-size: 18px; margin: 0 0 6px; }
+  #gate p { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  #gate input {
+    width: 100%; padding: 12px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); font-size: 14px; outline: none;
+    margin-bottom: 12px;
+  }
+  #gate input:focus { border-color: var(--accent); }
+  #gate button {
+    width: 100%; padding: 12px 14px; border-radius: 8px;
+    border: none; background: var(--accent); color: white;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  #gate button:hover { background: var(--accent-2); }
+  #gate .err { color: #ff6b6b; font-size: 12px; margin-top: 10px; min-height: 14px; }
+
+  /* ---------- App ---------- */
+  #app { display: none; height: 100%; }
+  #app.visible { display: flex; }
+
+  #sidebar {
+    width: 280px; min-width: 280px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  #sidebar header {
+    padding: 18px 16px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  #sidebar header h2 { font-size: 15px; margin: 0 0 2px; }
+  #sidebar header span { font-size: 12px; color: var(--muted); }
+
+  #piece-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .piece-item {
+    padding: 12px 12px; border-radius: 8px; cursor: pointer;
+    font-size: 13.5px; color: var(--text);
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 4px; border: 1px solid transparent;
+  }
+  .piece-item:hover { background: var(--panel-2); }
+  .piece-item.active { background: rgba(79,140,255,.15); border-color: rgba(79,140,255,.4); }
+  .piece-item .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0;
+  }
+  .piece-item.active .dot { background: var(--accent); }
+
+  #viewer-wrap { flex: 1; position: relative; background: #0b0d10; }
+  #viewer-container { position: absolute; inset: 0; }
+
+  #placeholder {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; color: var(--muted);
+    font-size: 14px; gap: 8px; text-align: center; padding: 20px;
+  }
+
+  #loading {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(11,13,16,.7); color: var(--text); font-size: 13px; gap: 10px;
+    flex-direction: column;
+  }
+  #loading.visible { display: flex; }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #error-box {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: #2a1418; border: 1px solid #5c2530; color: #ff9b9b;
+    padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: 80%;
+    display: none;
+  }
+  #error-box.visible { display: block; }
+
+  #piece-title {
+    position: absolute; top: 16px; left: 16px;
+    background: rgba(23,27,33,.85); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 8px; font-size: 13px; color: var(--text);
+    display: none;
+  }
+  #piece-title.visible { display: block; }
+
+  @media (max-width: 700px) {
+    #sidebar { width: 100%; min-width: 0; position: absolute; z-index: 10; height: 100%; transform: translateX(-100%); transition: transform .2s; }
+    #sidebar.open { transform: translateX(0); }
+    #menu-btn { display: flex !important; }
+  }
+  #menu-btn {
+    display: none; position: absolute; top: 16px; right: 16px; z-index: 11;
+    width: 36px; height: 36px; border-radius: 8px; background: var(--panel);
+    border: 1px solid var(--border); color: var(--text); align-items: center; justify-content: center;
+    cursor: pointer; font-size: 16px;
+  }
+</style>
+</head>
+<body>
+
+  <!-- Tela de senha -->
+  <div id="gate">
+    <div class="box">
+      <h1>Acesso restrito</h1>
+      <p>Digite a senha para visualizar as peças</p>
+      <input id="pw-input" type="password" placeholder="Senha" />
+      <button id="pw-btn">Entrar</button>
+      <div class="err" id="pw-err"></div>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app">
+    <div id="sidebar">
+      <header>
+        <h2>Peças</h2>
+        <span id="piece-count"></span>
+      </header>
+      <div id="piece-list"></div>
+    </div>
+    <div id="viewer-wrap">
+      <button id="menu-btn">☰</button>
+      <div id="viewer-container"></div>
+      <div id="placeholder">Selecione uma peça na lista à esquerda para visualizar</div>
+      <div id="piece-title"></div>
+      <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <span id="loading-text">Carregando peça…</span>
+      </div>
+      <div id="error-box"></div>
+    </div>
+  </div>
+
+<script>
+// ======================================================================
+// CONFIGURAÇÃO — edite aqui
+// ======================================================================
+
+// Senha de acesso (compartilhe apenas com quem deve ter acesso)
+const SITE_PASSWORD = "ENGELAR";
+
+// Lista de peças: nome exibido + link direto para o arquivo .ifc
+// Use links diretos (ex: GitHub raw, ou link de download direto do Drive)
+const PIECES = [
+  { name: "SP3", url: "https://raw.githubusercontent.com/felipeengelar/PE-AS-3D/main/SP3.ifc" },
+];
+
+window.SITE_PASSWORD = SITE_PASSWORD;
+window.PIECES = PIECES;
+
+// ======================================================================
+
+// ---- Gate de senha (funciona mesmo sem servidor web) ----
+const gate = document.getElementById('gate');
+const app = document.getElementById('app');
+const pwInput = document.getElementById('pw-input');
+const pwBtn = document.getElementById('pw-btn');
+const pwErr = document.getElementById('pw-err');
+
+function tryLogin() {
+  if (pwInput.value === SITE_PASSWORD) {
+    gate.style.display = 'none';
+    app.classList.add('visible');
+    if (window.__initViewer) {
+      window.__initViewer();
+    } else {
+      // O visualizador 3D depende de módulos que exigem um servidor web real
+      // (não funciona abrindo o arquivo direto com duplo-clique).
+      document.getElementById('placeholder').innerHTML =
+        'O visualizador 3D não carregou.<br><br>Isso acontece quando o arquivo é aberto direto do computador (duplo-clique).<br>Hospede este arquivo em um site (ex: GitHub Pages) para o 3D funcionar.';
+      renderListFallback();
+    }
+  } else {
+    pwErr.textContent = 'Senha incorreta.';
+  }
+}
+pwBtn.addEventListener('click', tryLogin);
+pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryLogin(); });
+
+function renderListFallback() {
+  const listEl = document.getElementById('piece-list');
+  const countEl = document.getElementById('piece-count');
+  countEl.textContent = PIECES.length + (PIECES.length === 1 ? ' peça' : ' peças');
+  listEl.innerHTML = '';
+  PIECES.forEach((piece) => {
+    const item = document.createElement('div');
+    item.className = 'piece-item';
+    item.innerHTML = '<span class="dot"></span><span>' + piece.name + '</span>';
+    listEl.appendChild(item);
+  });
+}
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { IFCLoader } from 'three/addons/loaders/IFCLoader.js';
+
+const PIECES = window.PIECES;
+window.__initViewer = initViewer;
+
+// ---- Lista de peças ----
+const listEl = document.getElementById('piece-list');
+const countEl = document.getElementById('piece-count');
+const titleEl = document.getElementById('piece-title');
+const placeholderEl = document.getElementById('placeholder');
+const loadingEl = document.getElementById('loading');
+const loadingTextEl = document.getElementById('loading-text');
+const errorBoxEl = document.getElementById('error-box');
+const menuBtn = document.getElementById('menu-btn');
+const sidebar = document.getElementById('sidebar');
+
+menuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
+
+function renderList() {
+  countEl.textContent = PIECES.length + (PIECES.length === 1 ? ' peça' : ' peças');
+  if (PIECES.length === 0) {
+    listEl.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px;">Nenhuma peça cadastrada ainda. Edite a lista PIECES no código do arquivo.</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  PIECES.forEach((piece, i) => {
+    const item = document.createElement('div');
+    item.className = 'piece-item';
+    item.innerHTML = '<span class="dot"></span><span>' + piece.name + '</span>';
+    item.addEventListener('click', () => selectPiece(i, item));
+    listEl.appendChild(item);
+  });
+}
+
+let activeItemEl = null;
+function selectPiece(index, itemEl) {
+  if (activeItemEl) activeItemEl.classList.remove('active');
+  itemEl.classList.add('active');
+  activeItemEl = itemEl;
+  sidebar.classList.remove('open');
+  loadPiece(PIECES[index]);
+}
+
+// ---- Viewer 3D (three.js + IFCLoader) ----
+let scene, camera, renderer, controls, ifcLoader, currentModel;
+
+function initViewer() {
+  const container = document.getElementById('viewer-container');
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0d10);
+
+  camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 5000);
+  camera.position.set(15, 15, 15);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 1);
+  dir.position.set(20, 30, 20);
+  scene.add(dir);
+  const grid = new THREE.GridHelper(50, 50, 0x2a303a, 0x1a1e24);
+  scene.add(grid);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  ifcLoader = new IFCLoader();
+  ifcLoader.ifcManager.setWasmPath('https://cdn.jsdelivr.net/npm/web-ifc@0.0.51/');
+
+  window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  });
+
+  animate();
+  renderList();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+function loadPiece(piece) {
+  errorBoxEl.classList.remove('visible');
+  placeholderEl.style.display = 'none';
+  loadingTextEl.textContent = 'Carregando "' + piece.name + '"…';
+  loadingEl.classList.add('visible');
+  titleEl.textContent = piece.name;
+  titleEl.classList.add('visible');
+
+  if (currentModel) {
+    scene.remove(currentModel);
+    currentModel = null;
+  }
+
+  ifcLoader.load(
+    piece.url,
+    (model) => {
+      currentModel = model;
+      scene.add(model);
+
+      // centraliza e enquadra a câmera no modelo
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+      controls.target.copy(center);
+      camera.position.copy(center).add(new THREE.Vector3(maxDim, maxDim, maxDim));
+      camera.near = maxDim / 100;
+      camera.far = maxDim * 100;
+      camera.updateProjectionMatrix();
+      controls.update();
+
+      loadingEl.classList.remove('visible');
+    },
+    undefined,
+    (err) => {
+      console.error(err);
+      loadingEl.classList.remove('visible');
+      errorBoxEl.textContent = 'Não foi possível carregar esta peça. Verifique se o link é um link direto para o arquivo .ifc (não uma página de visualização) e se o arquivo está acessível publicamente.';
+      errorBoxEl.classList.add('visible');
+      placeholderEl.style.display = 'flex';
+      titleEl.classList.remove('visible');
+    }
+  );
+}
+</script>
+</body>
+</html>
